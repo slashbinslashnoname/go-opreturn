@@ -1,4 +1,4 @@
-# OpReturner
+# Go-OPReturn
 
 A powerful Bitcoin CLI tool for creating and broadcasting Bitcoin transactions with OP_RETURN data using WIF private keys. Built with Go and featuring a modern, user-friendly interface.
 
@@ -23,19 +23,19 @@ A powerful Bitcoin CLI tool for creating and broadcasting Bitcoin transactions w
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/opreturner.git
-cd opreturner
+git clone https://github.com/slashbinslashnoname/go-opreturn.git
+cd go-opreturn
 
 # Build the binary
 make build
 
 # Or build manually
-go build -o opreturner main.go
+go build -o go-opreturn main.go
 ```
 
 ### Download Pre-built Binary
 
-Pre-built binaries are available for various platforms in the [releases](https://github.com/yourusername/opreturner/releases) section.
+Pre-built binaries are available for various platforms in the [releases](https://github.com/slashbinslashnoname/go-opreturn/releases) section.
 
 ## Usage
 
@@ -43,16 +43,16 @@ Pre-built binaries are available for various platforms in the [releases](https:/
 
 ```bash
 # Run with default settings (mainnet)
-./opreturner
+./go-opreturn
 
 # Specify network
-./opreturner --network testnet
+./go-opreturn --network testnet
 ```
 
 ### Command Line Options
 
 ```bash
-./opreturner [flags]
+./go-opreturn [flags]
 
 Flags:
   -n, --network string   Bitcoin network (mainnet or testnet) (default "mainnet")
@@ -70,7 +70,7 @@ Flags:
 
 ## Fee Structure
 
-OpReturner uses a **fixed 20% fee structure**:
+Go-OPReturn uses a **fixed 20% fee structure**:
 
 - **Service Fee**: 20% of the selected UTXO value
 - **Network Fee**: Automatically calculated based on current mempool.space rates
@@ -92,7 +92,7 @@ For a 10,000 satoshi UTXO:
 
 ## API Dependencies
 
-OpReturner uses the following external APIs:
+Go-OPReturn uses the following external APIs:
 
 - **mempool.space** - UTXO data and fee rate information
 - **Mainnet**: `https://mempool.space/api`
@@ -130,7 +130,7 @@ OpReturner uses the following external APIs:
 ### Project Structure
 
 ```
-opreturner/
+go-opreturn/
 ├── main.go          # Main application code
 ├── go.mod           # Go module dependencies
 ├── go.sum           # Go module checksums
