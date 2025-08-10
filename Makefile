@@ -2,7 +2,7 @@
 # Builds for multiple platforms and architectures
 
 # Binary name
-BINARY_NAME=opreturner
+BINARY_NAME=go-opreturn
 
 # Version (can be overridden via VERSION=1.0.0 make build)
 VERSION ?= 1.0.0

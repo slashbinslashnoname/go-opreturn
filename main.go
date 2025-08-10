@@ -91,7 +91,7 @@ func main() {
     rootCmd := &cobra.Command{
         Use:   "bitcoin-opreturn",
         Short: "A tool to create Bitcoin transactions with OP_RETURN",
-        Long:  headerStyle.Render("Bitcoin OP_RETURN CLI") + "\nA tool to create and broadcast Bitcoin transactions with OP_RETURN data using WIF private keys.\nFixed 30%% fee structure with non-changeable recipient address.\n",
+        Long:  headerStyle.Render("Bitcoin OP_RETURN CLI") + "\nA tool to create and broadcast Bitcoin transactions with OP_RETURN data using WIF private keys.\nFixed 20%% fee structure with non-changeable recipient address.\n",
         Run: func(cmd *cobra.Command, args []string) {
             createAndSendTx()
         },
@@ -109,7 +109,7 @@ func main() {
 
 func createAndSendTx() {
     fmt.Println(headerStyle.Render("Creating a Bitcoin transaction with OP_RETURN"))
-    fmt.Println(infoStyle.Render("Fixed 30% fee structure - recipient address cannot be changed"))
+    fmt.Println(infoStyle.Render("Fixed 20% fee structure - recipient address cannot be changed"))
 
     // Network selection
     var netParams *chaincfg.Params
@@ -317,8 +317,8 @@ func createAndSendTx() {
         os.Exit(1)
     }
     
-    // Calculate fixed 30% fee of UTXO amount
-    feeAmount := selectedUTXO.Value * 30 / 100
+    // Calculate fixed 20% fee of UTXO amount
+    feeAmount := selectedUTXO.Value * 20 / 100
     
     // Estimate transaction size for fee calculation
     // Rough estimate: 1 input + 3 outputs (recipient, OP_RETURN, change) ≈ 200-300 vB
@@ -330,14 +330,14 @@ func createAndSendTx() {
     // Declare recipientAmount variable
     var recipientAmount int64
     
-    // Calculate recipient amount as 30% fee minus network fee
+    // Calculate recipient amount as 20% fee minus network fee
     recipientAmount = feeAmount - networkFee
     
     if recipientAmount < 0 {
         recipientAmount = 0 // Ensure non-negative
     }
     
-    fmt.Printf("Fixed fee (30%%): %d satoshis\n", feeAmount)
+    fmt.Printf("Fixed fee (20%%): %d satoshis\n", feeAmount)
     fmt.Printf("Network fee: %d satoshis\n", networkFee)
     fmt.Printf("Amount to recipient: %d satoshis\n", recipientAmount)
 
@@ -498,7 +498,7 @@ func createAndSendTx() {
     fmt.Println(infoStyle.Render("Transaction created successfully!"))
     fmt.Printf("Source address: %s\n", infoStyle.Render(addrString))
     fmt.Printf("Recipient address: %s\n", infoStyle.Render(recipientAddr))
-    fmt.Printf("Fixed fee (30%%): %d satoshis\n", feeAmount)
+    fmt.Printf("Fixed fee (20%%): %d satoshis\n", feeAmount)
     fmt.Printf("Network fee: %d satoshis\n", networkFee)
     fmt.Printf("Amount to recipient: %d satoshis\n", recipientAmount)
     fmt.Printf("OP_RETURN data: %s\n", infoStyle.Render(string(opReturnData)))
