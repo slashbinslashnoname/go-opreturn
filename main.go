@@ -86,12 +86,29 @@ type MempoolAddressResponse struct {
     } `json:"tx_history"`
 }
 
+// getAddressType returns a human-readable string describing the address type
+func getAddressType(addr btcutil.Address) string {
+    if _, ok := addr.(*btcutil.AddressWitnessPubKeyHash); ok {
+        return "SegWit (P2WPKH)"
+    }
+    if _, ok := addr.(*btcutil.AddressPubKeyHash); ok {
+        return "Legacy (P2PKH)"
+    }
+    if _, ok := addr.(*btcutil.AddressScriptHash); ok {
+        return "P2SH"
+    }
+    if _, ok := addr.(*btcutil.AddressWitnessScriptHash); ok {
+        return "SegWit (P2WSH)"
+    }
+    return "Unknown"
+}
+
 func main() {
     // Root command with default execution
     rootCmd := &cobra.Command{
         Use:   "bitcoin-opreturn",
         Short: "A tool to create Bitcoin transactions with OP_RETURN",
-        Long:  headerStyle.Render("Bitcoin OP_RETURN CLI") + "\nA tool to create and broadcast Bitcoin transactions with OP_RETURN data using WIF private keys.\nFixed 20%% fee structure with non-changeable recipient address.\n",
+        Long:  headerStyle.Render("Bitcoin OP_RETURN CLI") + "\nA tool to create and broadcast Bitcoin transactions with OP_RETURN data using WIF private keys.\nSupports P2PKH, P2WPKH, and other Bitcoin address schemes.\nFixed 20%% fee structure with non-changeable recipient address.\n",
         Run: func(cmd *cobra.Command, args []string) {
             createAndSendTx()
         },
@@ -109,6 +126,7 @@ func main() {
 
 func createAndSendTx() {
     fmt.Println(headerStyle.Render("Creating a Bitcoin transaction with OP_RETURN"))
+    fmt.Println(infoStyle.Render("Supports P2PKH, P2WPKH, and other Bitcoin address schemes"))
     fmt.Println(infoStyle.Render("Fixed 20% fee structure - recipient address cannot be changed"))
 
     // Network selection
@@ -169,17 +187,36 @@ func createAndSendTx() {
     // Get private key from WIF
     privateKey := wif.PrivKey
 
-    // Get public key and create address
+    // Create address based on WIF type
+    // Supported address schemes:
+    // - Compressed WIF → SegWit (P2WPKH) address
+    // - Uncompressed WIF → Legacy P2PKH address
+    // Get public key and create address based on WIF type
     publicKey := privateKey.PubKey()
-    sourceAddr, err := btcutil.NewAddressWitnessPubKeyHash(btcutil.Hash160(publicKey.SerializeCompressed()), netParams)
-    if err != nil {
-        fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating address: %v", err)))
-        os.Exit(1)
+    var sourceAddr btcutil.Address
+    
+    // Detect address type from WIF and create appropriate address
+    if wif.CompressPubKey {
+        // Compressed public key - create SegWit address (P2WPKH)
+        sourceAddr, err = btcutil.NewAddressWitnessPubKeyHash(btcutil.Hash160(publicKey.SerializeCompressed()), netParams)
+        if err != nil {
+            fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating SegWit address: %v", err)))
+            os.Exit(1)
+        }
+        fmt.Println(infoStyle.Render("Detected compressed WIF - creating SegWit (P2WPKH) address"))
+    } else {
+        // Uncompressed public key - create legacy P2PKH address
+        sourceAddr, err = btcutil.NewAddressPubKeyHash(btcutil.Hash160(publicKey.SerializeUncompressed()), netParams)
+        if err != nil {
+            fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating P2PKH address: %v", err)))
+            os.Exit(1)
+        }
+        fmt.Println(infoStyle.Render("Detected uncompressed WIF - creating legacy P2PKH address"))
     }
 
     addrString := sourceAddr.EncodeAddress()
 
-    fmt.Println(infoStyle.Render(fmt.Sprintf("Source address (SegWit): %s", addrString)))
+    fmt.Println(infoStyle.Render(fmt.Sprintf("Source address (%s): %s", getAddressType(sourceAddr), addrString)))
 
     // Fetch UTXOs
     utxos, err := fetchUTXOs(addrString, apiBaseURL)
@@ -276,6 +313,7 @@ func createAndSendTx() {
     fmt.Println(infoStyle.Render("Final UTXO validation successful"))
 
     // Fixed recipient address - no user input allowed
+    // The recipient address supports all Bitcoin address formats (P2PKH, P2SH, P2WPKH, P2WSH)
     recipientAddr := "bc1qsqpwy7zp8uu6ld70g72lmmsntsv5qx74gwhur4"
     fmt.Printf("Recipient address (fixed): %s\n", infoStyle.Render(recipientAddr))
 
@@ -320,9 +358,17 @@ func createAndSendTx() {
     // Calculate fixed 20% fee of UTXO amount
     feeAmount := selectedUTXO.Value * 20 / 100
     
-    // Estimate transaction size for fee calculation
-    // Rough estimate: 1 input + 3 outputs (recipient, OP_RETURN, change) ≈ 200-300 vB
-    estimatedTxSize := 250 // Conservative estimate
+    // Estimate transaction size for fee calculation based on address type
+    var estimatedTxSize int
+    if wif.CompressPubKey {
+        // SegWit address (P2WPKH) - smaller transaction size
+        // 1 input + 3 outputs (recipient, OP_RETURN, change) ≈ 200-250 vB
+        estimatedTxSize = 225
+    } else {
+        // Legacy P2PKH address - larger transaction size due to signature scripts
+        // 1 input + 3 outputs (recipient, OP_RETURN, change) ≈ 300-350 vB
+        estimatedTxSize = 325
+    }
     
     // Calculate dynamic network fee
     networkFee := calculateNetworkFee(feeRates, estimatedTxSize, feeAmount)
@@ -396,8 +442,15 @@ func createAndSendTx() {
     // Calculate change amount first
     changeAmount := selectedUTXO.Value - recipientAmount - networkFee
     
-    // Ensure all outputs meet dust threshold (546 sats for P2WPKH)
-    const dustThreshold = 546
+    // Determine dust threshold based on address type
+    var dustThreshold int64
+    if wif.CompressPubKey {
+        // SegWit address (P2WPKH) - 546 sats
+        dustThreshold = 546
+    } else {
+        // Legacy P2PKH address - 546 sats (same as SegWit in Bitcoin)
+        dustThreshold = 546
+    }
     
     if recipientAmount > 0 && recipientAmount < dustThreshold {
         fmt.Println(warningStyle.Render("Warning: Recipient amount is below dust threshold"))
@@ -458,21 +511,39 @@ func createAndSendTx() {
     txOutChange := wire.NewTxOut(changeAmount, changeScript)
     tx.AddTxOut(txOutChange)
 
-    // Sign the transaction for SegWit
-    // For SegWit, we need to create the witness data and leave scriptSig empty
-    sigHashes := txscript.NewTxSigHashes(tx)
-    witness, err := txscript.WitnessSignature(tx, sigHashes, 0, selectedUTXO.Value, changeScript, txscript.SigHashAll, privateKey, true)
-    if err != nil {
-        fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating witness signature: %v", err)))
-        os.Exit(1)
+    // Sign the transaction based on address type
+    if wif.CompressPubKey {
+        // SegWit address (P2WPKH) - use witness signature
+        fmt.Println(infoStyle.Render("Signing transaction for SegWit address..."))
+        sigHashes := txscript.NewTxSigHashes(tx)
+        witness, err := txscript.WitnessSignature(tx, sigHashes, 0, selectedUTXO.Value, changeScript, txscript.SigHashAll, privateKey, true)
+        if err != nil {
+            fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating witness signature: %v", err)))
+            os.Exit(1)
+        }
+        
+        // Set the witness data (required for SegWit)
+        tx.TxIn[0].Witness = witness
+        
+        // For SegWit, scriptSig should be empty
+        tx.TxIn[0].SignatureScript = nil
+    } else {
+        // Legacy P2PKH address - use traditional signature
+        fmt.Println(infoStyle.Render("Signing transaction for legacy P2PKH address..."))
+        
+        // Create the signature script for P2PKH
+        sigScript, err := txscript.SignatureScript(tx, 0, changeScript, txscript.SigHashAll, privateKey, true)
+        if err != nil {
+            fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating signature script: %v", err)))
+            os.Exit(1)
+        }
+        
+        // Set the signature script for legacy transactions
+        tx.TxIn[0].SignatureScript = sigScript
+        
+        // For legacy transactions, witness should be nil
+        tx.TxIn[0].Witness = nil
     }
-    
-    // Set the witness data (required for SegWit)
-    tx.TxIn[0].Witness = witness
-    
-    // For SegWit, scriptSig should be empty
-    // The witness field contains all the signature data
-    tx.TxIn[0].SignatureScript = nil
 
     // Debug: Verify transaction structure before serialization
     fmt.Printf("Transaction structure before serialization:\n")
