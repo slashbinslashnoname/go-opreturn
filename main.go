@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -42,7 +43,6 @@ var (
 
 	// Flags for the command
 	network string
-	refresh bool
 )
 
 // Structure for UTXOs retrieved from mempool.space
@@ -101,6 +101,134 @@ func getAddressType(addr btcutil.Address) string {
 		return "SegWit (P2WSH)"
 	}
 	return "Unknown"
+}
+
+// decodeTransaction decodes a hex transaction and returns a JSON representation
+func decodeTransaction(txHex string) (map[string]interface{}, error) {
+	// Decode hex to bytes
+	txBytes, err := hex.DecodeString(txHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode hex: %v", err)
+	}
+
+	// Deserialize transaction
+	var tx wire.MsgTx
+	if err := tx.Deserialize(bytes.NewReader(txBytes)); err != nil {
+		return nil, fmt.Errorf("failed to deserialize transaction: %v", err)
+	}
+
+	// Calculate txid and hash
+	txid := tx.TxHash().String()
+	hash := tx.TxHash().String() // For non-SegWit transactions, hash == txid
+
+	// Create the full JSON structure
+	result := map[string]interface{}{
+		"txid":     txid,
+		"hash":     hash,
+		"version":  tx.Version,
+		"size":     len(txBytes),
+		"vsize":    len(txBytes),     // Simplified for now
+		"weight":   len(txBytes) * 4, // Simplified for now
+		"locktime": tx.LockTime,
+		"vin":      make([]map[string]interface{}, len(tx.TxIn)),
+		"vout":     make([]map[string]interface{}, len(tx.TxOut)),
+	}
+
+	// Process inputs
+	for i, input := range tx.TxIn {
+		// Convert witness to string representation
+		witnessStr := make([]string, len(input.Witness))
+		for j, witnessItem := range input.Witness {
+			witnessStr[j] = hex.EncodeToString(witnessItem)
+		}
+
+		result["vin"].([]map[string]interface{})[i] = map[string]interface{}{
+			"txid":        input.PreviousOutPoint.Hash.String(),
+			"vout":        input.PreviousOutPoint.Index,
+			"sequence":    input.Sequence,
+			"scriptSig":   map[string]string{"asm": "", "hex": hex.EncodeToString(input.SignatureScript)},
+			"txinwitness": witnessStr,
+		}
+	}
+
+	// Process outputs
+	for i, output := range tx.TxOut {
+		// Decode script to get type and address
+		scriptClass, addresses, _, err := txscript.ExtractPkScriptAddrs(output.PkScript, &chaincfg.MainNetParams)
+		if err != nil {
+			scriptClass = txscript.NonStandardTy
+		}
+
+		var addr string
+		if len(addresses) > 0 {
+			addr = addresses[0].String()
+		}
+
+		// Get script assembly
+		asm, err := txscript.DisasmString(output.PkScript)
+		if err != nil {
+			asm = ""
+		}
+
+		result["vout"].([]map[string]interface{})[i] = map[string]interface{}{
+			"value": btcutil.Amount(output.Value).ToBTC(),
+			"n":     i,
+			"scriptPubKey": map[string]any{
+				"asm":     asm,
+				"hex":     hex.EncodeToString(output.PkScript),
+				"type":    scriptClass.String(),
+				"address": addr,
+			},
+		}
+	}
+
+	return result, nil
+}
+
+// broadcastTransaction sends a raw transaction to the network via mempool.space
+func broadcastTransaction(txHex, apiBaseURL string) (string, error) {
+	// Prepare the request
+	url := fmt.Sprintf("%s/tx", apiBaseURL)
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", url, strings.NewReader(txHex))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "text/plain")
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %v", err)
+	}
+
+	// Check status code
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Return txid (response body contains the txid)
+	txid := strings.TrimSpace(string(body))
+	if len(txid) == 0 {
+		return "", fmt.Errorf("empty txid received from API")
+	}
+
+	return txid, nil
 }
 
 func main() {
@@ -181,7 +309,7 @@ func createAndSendTx() {
 	}
 
 	// Check if WIF network matches selected network
-	if wif.IsForNet(netParams) == false {
+	if !wif.IsForNet(netParams) {
 		fmt.Println(errorStyle.Render("Warning: WIF key network does not match selected network"))
 	}
 	// Get private key from WIF
@@ -242,7 +370,7 @@ func createAndSendTx() {
 
 	// Validate that the selected UTXO is still available
 	fmt.Printf("Validating UTXO availability...\n")
-	if err := validateUTXO(selectedUTXO, apiBaseURL, addrString); err != nil {
+	if err := validateUTXO(selectedUTXO, apiBaseURL); err != nil {
 		fmt.Println(errorStyle.Render(fmt.Sprintf("UTXO validation failed: %v", err)))
 		fmt.Println(errorStyle.Render("This UTXO may have been spent or is no longer available."))
 
@@ -288,7 +416,7 @@ func createAndSendTx() {
 				selectedUTXO.Txid, selectedUTXO.Vout, selectedUTXO.Value)
 
 			// Validate the new UTXO
-			if err := validateUTXO(selectedUTXO, apiBaseURL, addrString); err != nil {
+			if err := validateUTXO(selectedUTXO, apiBaseURL); err != nil {
 				fmt.Println(errorStyle.Render(fmt.Sprintf("New UTXO validation also failed: %v", err)))
 				fmt.Println(errorStyle.Render("Please try again later or check your address balance."))
 				os.Exit(1)
@@ -304,7 +432,7 @@ func createAndSendTx() {
 
 	// Final validation check right before transaction creation to catch race conditions
 	fmt.Printf("Performing final UTXO validation...\n")
-	if err := validateUTXO(selectedUTXO, apiBaseURL, addrString); err != nil {
+	if err := validateUTXO(selectedUTXO, apiBaseURL); err != nil {
 		fmt.Println(errorStyle.Render(fmt.Sprintf("Final UTXO validation failed: %v", err)))
 		fmt.Println(errorStyle.Render("This UTXO was spent between selection and transaction creation."))
 		fmt.Println(errorStyle.Render("Please refresh the UTXO list and try again."))
@@ -495,27 +623,39 @@ func createAndSendTx() {
 	txOutOPReturn := wire.NewTxOut(0, opReturnScript)
 	tx.AddTxOut(txOutOPReturn)
 
-	// Add the change output
-	// changeAmount is already calculated above, just use it
-	if changeAmount < 0 {
-		fmt.Println(errorStyle.Render("Error: available amount is insufficient to cover output and network fees"))
-		fmt.Printf("Required: %d satoshis, Available: %d satoshis\n", recipientAmount+networkFee, selectedUTXO.Value)
-		os.Exit(1)
+	// Add the change output (only if amount > 0)
+	var changeScript []byte
+	if changeAmount > 0 {
+		changeScript, err = txscript.PayToAddrScript(sourceAddr)
+		if err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating change script: %v", err)))
+			os.Exit(1)
+		}
+		txOutChange := wire.NewTxOut(changeAmount, changeScript)
+		tx.AddTxOut(txOutChange)
+		fmt.Printf("Added change output: %d satoshis\n", changeAmount)
+	} else {
+		fmt.Println(infoStyle.Render("No change output needed (amount below dust threshold or zero)"))
 	}
-	changeScript, err := txscript.PayToAddrScript(sourceAddr)
-	if err != nil {
-		fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating change script: %v", err)))
-		os.Exit(1)
-	}
-	txOutChange := wire.NewTxOut(changeAmount, changeScript)
-	tx.AddTxOut(txOutChange)
 
 	// Sign the transaction based on address type
 	if wif.CompressPubKey {
 		// SegWit address (P2WPKH) - use witness signature
 		fmt.Println(infoStyle.Render("Signing transaction for SegWit address..."))
 		sigHashes := txscript.NewTxSigHashes(tx)
-		witness, err := txscript.WitnessSignature(tx, sigHashes, 0, selectedUTXO.Value, changeScript, txscript.SigHashAll, privateKey, true)
+
+		// Use change script if exists, otherwise use OP_RETURN script for signing
+		signingScript := changeScript
+		if len(signingScript) == 0 {
+			// No change output, use OP_RETURN script for signing
+			signingScript, err = txscript.NullDataScript([]byte(data))
+			if err != nil {
+				fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating OP_RETURN script for signing: %v", err)))
+				os.Exit(1)
+			}
+		}
+
+		witness, err := txscript.WitnessSignature(tx, sigHashes, 0, selectedUTXO.Value, signingScript, txscript.SigHashAll, privateKey, true)
 		if err != nil {
 			fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating witness signature: %v", err)))
 			os.Exit(1)
@@ -530,8 +670,19 @@ func createAndSendTx() {
 		// Legacy P2PKH address - use traditional signature
 		fmt.Println(infoStyle.Render("Signing transaction for legacy P2PKH address..."))
 
+		// Use change script if exists, otherwise use OP_RETURN script for signing
+		signingScript := changeScript
+		if len(signingScript) == 0 {
+			// No change output, use OP_RETURN script for signing
+			signingScript, err = txscript.NullDataScript([]byte(data))
+			if err != nil {
+				fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating OP_RETURN script for signing: %v", err)))
+				os.Exit(1)
+			}
+		}
+
 		// Create the signature script for P2PKH
-		sigScript, err := txscript.SignatureScript(tx, 0, changeScript, txscript.SigHashAll, privateKey, true)
+		sigScript, err := txscript.SignatureScript(tx, 0, signingScript, txscript.SigHashAll, privateKey, true)
 		if err != nil {
 			fmt.Println(errorStyle.Render(fmt.Sprintf("Error creating signature script: %v", err)))
 			os.Exit(1)
@@ -585,12 +736,57 @@ func createAndSendTx() {
 	}
 	fmt.Println(infoStyle.Render("Final UTXO validation successful - UTXO is still available"))
 
-	fmt.Println(headerStyle.Render("Next steps"))
-	fmt.Println("To broadcast the transaction, use a Bitcoin node (bitcoind) or an API like mempool.space.")
-	fmt.Println(infoStyle.Render(fmt.Sprintf("bitcoin-cli sendrawtransaction %s", txHex)))
+	// Decode and display transaction details
+	fmt.Println("\n" + headerStyle.Render("Transaction Details"))
+	txData, err := decodeTransaction(txHex)
+	if err != nil {
+		fmt.Println(errorStyle.Render(fmt.Sprintf("Error decoding transaction: %v", err)))
+		os.Exit(1)
+	}
 
-	// Transaction validity checking disabled
-	fmt.Println(infoStyle.Render("Transaction validity checking disabled - proceeding directly to broadcast"))
+	// Pretty print JSON
+	txJSON, err := json.MarshalIndent(txData, "", "  ")
+	if err != nil {
+		fmt.Println(errorStyle.Render(fmt.Sprintf("Error formatting transaction JSON: %v", err)))
+		os.Exit(1)
+	}
+	fmt.Println(string(txJSON))
+
+	// Ask for broadcast confirmation
+	promptBroadcast := promptui.Prompt{
+		Label: "Broadcast transaction? (y/N)",
+		Validate: func(input string) error {
+			if input != "y" && input != "n" && input != "Y" && input != "N" && input != "" {
+				return fmt.Errorf("please enter 'y' or 'n'")
+			}
+			return nil
+		},
+	}
+
+	broadcastChoice, err := promptBroadcast.Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render(fmt.Sprintf("Error: %v", err)))
+		os.Exit(1)
+	}
+
+	if strings.ToLower(broadcastChoice) == "y" {
+		fmt.Println("\nBroadcasting transaction to network...")
+
+		txid, err := broadcastTransaction(txHex, apiBaseURL)
+		if err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("Broadcast failed: %v", err)))
+			fmt.Println(errorStyle.Render("You can still broadcast manually using:"))
+			fmt.Println(infoStyle.Render(fmt.Sprintf("bitcoin-cli sendrawtransaction %s", txHex)))
+			os.Exit(1)
+		}
+
+		fmt.Println(infoStyle.Render("Transaction broadcast successfully!"))
+		fmt.Printf("Txid: %s\n", infoStyle.Render(txid))
+		fmt.Printf("View on mempool.space: %s/tx/%s\n", apiBaseURL, txid)
+	} else {
+		fmt.Println(infoStyle.Render("Transaction not broadcast. You can broadcast manually using:"))
+		fmt.Println(infoStyle.Render(fmt.Sprintf("bitcoin-cli sendrawtransaction %s", txHex)))
+	}
 
 }
 
@@ -724,7 +920,7 @@ func selectUTXO(utxos []MempoolUTXO) (MempoolUTXO, error) {
 }
 
 // validateUTXO checks if a UTXO is still available on the mempool.space API
-func validateUTXO(utxo MempoolUTXO, apiBaseURL, sourceAddress string) error {
+func validateUTXO(utxo MempoolUTXO, apiBaseURL string) error {
 	// Check if the transaction output is still unspent using the outspend API
 	outspendURL := fmt.Sprintf("%s/tx/%s/outspend/%d", apiBaseURL, utxo.Txid, utxo.Vout)
 
@@ -788,40 +984,6 @@ func validateUTXO(utxo MempoolUTXO, apiBaseURL, sourceAddress string) error {
 func refreshUTXOs(address, apiBaseURL string) ([]MempoolUTXO, error) {
 	fmt.Printf("Refreshing UTXOs for address: %s\n", address)
 	return fetchUTXOs(address, apiBaseURL)
-}
-
-// getUTXOStatus provides detailed status information for a specific UTXO
-func getUTXOStatus(txid string, vout int, apiBaseURL string) error {
-	url := fmt.Sprintf("%s/tx/%s/outspend/%d", apiBaseURL, txid, vout)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to check UTXO status: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return fmt.Errorf("UTXO %s:%d not found (may have been spent)", txid, vout)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("API returned status %d for UTXO %s:%d", resp.StatusCode, txid, vout)
-	}
-
-	var outspend struct {
-		Spent bool `json:"spent"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&outspend); err != nil {
-		return fmt.Errorf("failed to decode UTXO status: %v", err)
-	}
-
-	if outspend.Spent {
-		return fmt.Errorf("UTXO %s:%d is spent", txid, vout)
-	}
-
-	fmt.Printf("UTXO %s:%d is available (unspent)\n", txid, vout)
-	return nil
 }
 
 // liveUTXOCheck performs an immediate, aggressive check of UTXO availability
