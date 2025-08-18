@@ -9,6 +9,7 @@ A powerful Bitcoin CLI tool for creating and broadcasting Bitcoin transactions w
 - 💰 **Fixed 20% Fee Structure** - Transparent, predictable pricing with automatic network fee calculation
 - 🌐 **Multi-Network Support** - Works with both Bitcoin mainnet and testnet
 - 📡 **Real-time UTXO Management** - Live UTXO validation and refresh capabilities
+- 📤 **Direct Transaction Broadcasting** - Send transactions directly to the Bitcoin network
 - 🎨 **Beautiful CLI Interface** - Modern, colored output with clear information display
 - 🛡️ **Built-in Safety Checks** - Dust threshold validation and UTXO availability verification
 
@@ -66,7 +67,7 @@ Flags:
 3. **Select UTXO** - Choose from available unspent transaction outputs
 4. **Enter OP_RETURN Data** - Specify your custom data (max 80 bytes)
 5. **Review & Confirm** - Check transaction details before creation
-6. **Get Transaction Hex** - Receive the raw transaction for broadcasting
+6. **Broadcast Transaction** - Send transaction directly to the Bitcoin network
 
 ## Fee Structure
 
@@ -94,7 +95,7 @@ For a 10,000 satoshi UTXO:
 
 Go-OPReturn uses the following external APIs:
 
-- **mempool.space** - UTXO data and fee rate information
+- **mempool.space** - UTXO data, fee rate information, and transaction broadcasting
 - **Mainnet**: `https://mempool.space/api`
 - **Testnet**: `https://mempool.space/testnet/api`
 
@@ -124,6 +125,13 @@ Go-OPReturn uses the following external APIs:
 - **SegWit Support** - Native SegWit transaction signing
 - **Witness Data** - Proper witness structure for SegWit transactions
 - **Script Signature** - Empty scriptSig for SegWit inputs
+
+### Transaction Broadcasting
+
+- **Direct Broadcast** - Send transactions directly to the Bitcoin network
+- **JSON Preview** - View transaction details before broadcasting
+- **User Confirmation** - Simple y/N prompt for transaction confirmation
+- **Fallback Support** - Manual broadcast instructions if automatic broadcast fails
 
 ## Development
 
@@ -226,6 +234,7 @@ If you need help or have questions:
 
 ## Roadmap
 
+- [x] Direct transaction broadcasting
 - [ ] Support for multiple UTXO inputs
 - [ ] Batch transaction creation
 - [ ] Custom fee rate selection
